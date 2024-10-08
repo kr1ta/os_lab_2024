@@ -6,5 +6,5 @@ for i in "$@"
 do
 sum=$((sum+i))
 done
-average=$(echo "scale=2;$sum / $#" | bc)
+average=$(echo "scale=3;$sum / $#" | bc)
 echo "average: $average"
