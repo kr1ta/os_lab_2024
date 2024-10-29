@@ -1,9 +1,7 @@
-#include <ctype.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -16,14 +14,15 @@
 
 pid_t *child_pids; 
 int pnum; 
+volatile sig_atomic_t alarm_triggered = 0;
 
 void handle_alarm(int sig) 
 {
+    alarm_triggered = 1; 
     for (int i = 0; i < pnum; i++) 
     {
         if (kill(child_pids[i], 0) == 0) 
         {
-            printf("Killing child process %d (PID: %d)\n", i + 1, child_pids[i]);
             kill(child_pids[i], SIGKILL);
         }
     }
@@ -83,8 +82,6 @@ int main(int argc, char **argv)
                 if (timeout < 0)
                     handle_error("Timeout must be a non-negative integer.");
                 break;
-            default:
-                printf("Index %d is out of options\n", option_index);
             }
             break;
         case 'f':
@@ -93,15 +90,7 @@ int main(int argc, char **argv)
         case '?':
             handle_error("Unrecognized option. Please check your input.");
             break;
-        default:
-            printf("getopt returned character code %o?\n", c);
         }
-    }
-
-    if (optind < argc)
-    {
-        printf("Has at least one no option argument\n");
-        return 1;
     }
 
     if (seed == -1 || array_size == -1 || pnum == -1)
@@ -110,17 +99,23 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    child_pids = (pid_t *)malloc(pnum * sizeof(pid_t));
+    child_pids = malloc(pnum * sizeof(pid_t));
+    if (!child_pids) handle_error("Failed to allocate memory for child PIDs.");
+
     int *array = malloc(sizeof(int) * array_size);
+    if (!array) handle_error("Failed to allocate memory for the array.");
+
     GenerateArray(array, array_size, seed);
     
     struct timeval start_time;
     gettimeofday(&start_time, NULL);
 
     int fd[2];
-    pipe(fd);
+    if (pipe(fd) == -1) {
+        perror("pipe");
+        exit(EXIT_FAILURE);
+    }
 
-    char *fname_tmpl = "/tmp/temp_result_%d";
     int chunk_size = array_size / pnum;
 
     for (int i = 0; i < pnum; i++)
@@ -138,6 +133,7 @@ int main(int argc, char **argv)
 
         if (child_pid == 0) 
         {
+            close(fd[0]);
             int begin = i * chunk_size;
             int end = (i + 1) * chunk_size;
             if (end > array_size)
@@ -150,10 +146,10 @@ int main(int argc, char **argv)
             if (with_files)
             {
                 char fname[1000];
-                sprintf(fname, fname_tmpl, i);
+                sprintf(fname, "/tmp/temp_result_%d", i);
 
                 FILE *fptr = fopen(fname, "w");
-                if (fptr == NULL)
+                if (!fptr)
                 {
                     printf("Failed to create file!\n");
                     return 1;
@@ -165,82 +161,90 @@ int main(int argc, char **argv)
             else
             {
                 write(fd[1], &min_max, sizeof(min_max));
+                close(fd[1]);
             }
             
-            return 0;
+            return 0; 
         }
     }
+
+    close(fd[1]);
 
     if (timeout > 0)
     {
-        signal(SIGALRM, handle_alarm); 
+        signal(SIGALRM, handle_alarm);
         alarm(timeout);
-		for (int i = 0; i < pnum; i++) 
-		{
-			printf("kek\n");
-			waitpid(child_pids[i], NULL, 0);
-		}
-		printf("lol");
+
+        for (int i = 0; i < pnum; i++)
+        {
+            waitpid(child_pids[i], NULL, 0);
+        }
+        
+        if (alarm_triggered)
+        {
+            printf("Exiting due to alarm.\n");
+            free(array);
+            free(child_pids);
+            return 1; 
+        }
     }
-	else
+	else 
 	{
 		for (int i = 0; i < pnum; i++)
 		{
-			wait(NULL);
+			wait(NULL); 
 		}
 	}
 
-    struct MinMax min_max;
-    min_max.min = INT_MAX;
-    min_max.max = INT_MIN;
+	struct MinMax min_max;
+	min_max.min = INT_MAX;
+	min_max.max = INT_MIN;
 
-    for (int i = 0; i < pnum; i++)
-    {
-        struct MinMax mm;
+	for (int i = 0; i < pnum; i++)
+	{
+	    struct MinMax mm;
 
-        if (with_files)
-        {
-            char fname[1000];
-            sprintf(fname, fname_tmpl, i);
+	    if (with_files)
+	    {
+	        char fname[1000];
+	        sprintf(fname, "/tmp/temp_result_%d", i);
 
-            FILE *fptr = fopen(fname, "r");
-            if (fptr == NULL)
-            {
-                printf("Failed to read file!\n");
-                free(child_pids); // Free allocated memory before exiting
-                free(array);
-                return 1;
-            }
+	        FILE *fptr = fopen(fname, "r");
+	        if (!fptr)
+	        {
+	            printf("Failed to read file!\n");
+	            free(child_pids); 
+	            free(array);
+	            return 1;
+	        }
 
-            fscanf(fptr, "%d_%d", &mm.min, &mm.max);
-            fclose(fptr);
-        }
-        else
-        {
-            read(fd[0], &mm, sizeof(mm));
-        }
+	        fscanf(fptr, "%d_%d", &mm.min, &mm.max);
+	        fclose(fptr);
+	    }
+	    else
+	    {
+	        read(fd[0], &mm, sizeof(mm));
+	    }
 
-        if (mm.min < min_max.min)
-            min_max.min = mm.min;
+	    if (mm.min < min_max.min)
+	        min_max.min = mm.min;
 
-        if (mm.max > min_max.max)
-            min_max.max = mm.max;
-    }
+	    if (mm.max > min_max.max)
+	        min_max.max = mm.max;
+	}
 
-    struct timeval finish_time;
-    gettimeofday(&finish_time, NULL);
+	struct timeval finish_time;
+	gettimeofday(&finish_time, NULL);
 
-    double elapsed_time = (finish_time.tv_sec - start_time.tv_sec) * 1000.0;
-    elapsed_time += (finish_time.tv_usec - start_time.tv_usec) / 1000.0;
+	double elapsed_time = (finish_time.tv_sec - start_time.tv_sec) * 1000.0;
+	elapsed_time += (finish_time.tv_usec - start_time.tv_usec) / 1000.0;
 
-    free(array); 
-    free(child_pids); 
+	free(array); 
+	free(child_pids); 
 
-    printf("Min: %d\n", min_max.min);
-    printf("Max: %d\n", min_max.max);
-    printf("Elapsed time: %fms\n", elapsed_time);
+	printf("Min: %d\n", min_max.min);
+	printf("Max: %d\n", min_max.max);
+	printf("Elapsed time: %fms\n", elapsed_time);
 
-    fflush(NULL);
-
-    return EXIT_SUCCESS;
+	return EXIT_SUCCESS;
 }

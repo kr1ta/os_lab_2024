@@ -29,8 +29,8 @@ main() {
   SHW_ADR("showit", showit);
   SHW_ADR("cptr", cptr);
   SHW_ADR("buffer1", buffer1);
-  SHW_ADR("i", i);
-  strcpy(buffer1, "A demonstration\n");   /* Library function */
+  SHW_ADR("i      ", i);
+  strcpy(buffer1, "\tA demonstration\n");   /* Library function */
   write(1, buffer1, strlen(buffer1) + 1); /* System call */
   showit(cptr);
 
