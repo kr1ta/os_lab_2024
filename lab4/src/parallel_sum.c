@@ -112,6 +112,6 @@ int main(int argc, char **argv) {
   free(threads);
   printf("Total: %d\n", total_sum);
   printf("Elapsed time: %fms\n", elapsed_time);
-	fflush(NULL);
+  fflush(NULL);
   return 0;
 }
